@@ -46,7 +46,9 @@ details div{margin-top:10px;display:grid;gap:10px}
 .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
 .acts button{padding:6px 12px;font-size:.88rem}
 .top{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
-#toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:9px 16px;border-radius:6px;opacity:0;transition:opacity .2s;pointer-events:none}
+button.dl{background:var(--sig);border-color:var(--sig);color:#fff}button.dl:hover{background:#c92b38}
+#setup{margin-top:48px;border-top:1.5px solid var(--line);padding-top:8px;max-width:64ch}#setup h2{font:700 1.4rem 'Bricolage Grotesque',sans-serif}code{background:var(--panel);padding:1px 6px;border-radius:4px}
+#toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:9px 16px;border-radius:6px;opacity:0;transition:opacity .2s;max-width:90vw;pointer-events:none}
 #toast.on{opacity:1}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
@@ -62,15 +64,16 @@ details div{margin-top:10px;display:grid;gap:10px}
 </div>
 <div class="opts">
   <label>Clip length <output id="lenO">45 sec</output><input type="range" id="len" min="30" max="60" step="5" value="45"></label>
+  <label style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="vert" checked> Vertical 9:16 for Shorts</label>
   <label>Number of clips <output id="cntO">5</output><input type="range" id="cnt" min="1" max="8" value="5"></label>
 </div>
 <details>
-  <summary>Improve accuracy (optional)</summary>
+  <summary>Paste a transcript (optional)</summary>
   <div>
     <textarea id="tr" placeholder="Paste a transcript with timestamps, one line each:&#10;0:12 So here's the secret nobody tells you…&#10;0:19 First, never skip this step!"></textarea>
-    <input type="text" id="api" placeholder="Replay-heatmap API URL (optional, see README)">
   </div>
 </details>
+<p class="src" id="helper"></p>
 <p id="err" role="alert"></p>
 
 <div class="player"><div id="player"></div></div>
@@ -79,9 +82,21 @@ details div{margin-top:10px;display:grid;gap:10px}
   <p class="src" id="src"></p>
   <div class="top">
     <button id="copyAll">Copy all timestamps</button>
+    <button id="dlAll" class="dl">Download all clips</button>
     <button id="json">Download JSON</button>
   </div>
   <div id="list"></div>
+</section>
+<section id="setup">
+  <h2>Turn on one-click downloads</h2>
+  <p>Browsers can’t download from YouTube, so a small helper runs on your own computer. You set it up once.</p>
+  <ol>
+    <li>Install Python from python.org. On Windows, tick “Add Python to PATH”.</li>
+    <li>On this project’s GitHub page choose Code, then Download ZIP, and unzip it.</li>
+    <li>Windows: double-click <code>helper/start.bat</code>. Mac: open Terminal and run <code>bash helper/start.command</code> from the unzipped folder. Leave the window open.</li>
+    <li>Reload this page. The status line near the top says “connected”.</li>
+  </ol>
+  <p>Use Chrome, Edge or Firefox. Safari blocks pages from reaching the helper.</p>
 </section>
 </main>
 <div id="toast" role="status"></div>
@@ -93,12 +108,15 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const ready=new Promise(r=>{window.onYouTubeIframeAPIReady=()=>{player=new YT.Player('player',{width:'100%',height:'100%',playerVars:{rel:0,playsinline:1},events:{onReady:r,onError:e=>{ytErr=e.data}}})}});
 const tag=document.createElement('script');tag.src='https://www.youtube.com/iframe_api';document.head.appendChild(tag);
 
+const HELPER='http://localhost:8765';let helperOn=false;
+async function ping(){try{helperOn=(await fetch(HELPER+'/ping')).ok}catch{helperOn=false}
+  $('#helper').innerHTML=helperOn?'Helper connected: real “most replayed” data and one-click downloads are on.':'Helper not running, so picks are estimates and clips can’t be downloaded. <a href="#setup">Set it up in 2 minutes</a>.'}
+ping();
 const pad=n=>String(n).padStart(2,'0');
 const fmt=s=>{s=Math.round(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return (h?h+':'+pad(m):m)+':'+pad(s%60)};
 const parseId=u=>{u=u.trim();const m=u.match(/(?:v=|youtu\.be\/|shorts\/|embed\/|live\/)([\w-]{11})/);return m?m[1]:(/^[\w-]{11}$/.test(u)?u:null)};
-const toast=t=>{const e=$('#toast');e.textContent=t;e.classList.add('on');setTimeout(()=>e.classList.remove('on'),1600)};
+const toast=t=>{const e=$('#toast');e.textContent=t;e.classList.add('on');setTimeout(()=>e.classList.remove('on'),3500)};
 const copy=async t=>{try{await navigator.clipboard.writeText(t);toast('Copied')}catch{toast('Copy failed: select the text manually')}};
-try{$('#api').value=localStorage.getItem('cf_api')||''}catch{}
 
 $('#len').oninput=e=>$('#lenO').textContent=e.target.value+' sec';
 $('#cnt').oninput=e=>$('#cntO').textContent=e.target.value;
@@ -129,9 +147,8 @@ async function run(){
     if(!dur){throw new Error('Could not read that video’s length. It may be a live stream or blocked from embedding.')}
     const len=+$('#len').value,n=+$('#cnt').value;
     let curve=null,source='';
-    const api=$('#api').value.trim();
-    try{localStorage.setItem('cf_api',api)}catch{}
-    if(api){curve=await fromApi(api,id);source=curve?'Source: viewer replay heatmap (most replayed sections).':''}
+    await ping();
+    if(helperOn){const h=await fromHelper(id);if(h){curve=h.curve;source=h.source}}
     if(!curve){const t=$('#tr').value.trim();if(t){curve=fromTranscript(t);source=curve?'Source: transcript scoring (keywords, questions, emphasis, speech density).':''}}
     if(!curve){curve=fallback();source='Source: estimate only. Videos tend to peak early and near the climax. Add a transcript or heatmap API above for real signal.'}
     clips=pick(curve,len,n);
@@ -140,19 +157,19 @@ async function run(){
   $('#go').disabled=false;$('#go').textContent='Find clips';
 }
 
-async function fromApi(base,id){
+async function fromHelper(id){
   try{
-    const r=await fetch(base.replace(/\/$/,'')+'/heatmap?v='+id);
-    const j=await r.json();
-    const a=Array.isArray(j)?j:j.heatmap;
-    if(!a||!a.length)return null;
-    const c=new Array(Math.ceil(dur)).fill(0);
-    a.forEach((p,i)=>{
-      if(typeof p==='number'){const s=Math.floor(i*dur/a.length);c[s]=Math.max(c[s],p)}
-      else{const s=Math.floor(p.start??p.start_time/1000??0),e=Math.ceil(s+(p.duration??p.end_time/1000-s??1));for(let k=s;k<e&&k<c.length;k++)c[k]=p.value??p.intensityScoreNormalized??0}
-    });
-    return smooth(norm(c),3);
-  }catch{toast('Heatmap API failed. Using another method.');return null}
+    const j=await (await fetch(HELPER+'/analyze?v='+id)).json();
+    if(j.error)throw new Error(j.error);
+    if(j.heatmap&&j.heatmap.length){
+      const c=new Array(Math.ceil(dur)).fill(0);
+      j.heatmap.forEach(p=>{for(let k=Math.floor(p.start);k<Math.ceil(p.start+p.duration)&&k<c.length;k++)c[k]=p.value});
+      return {curve:smooth(norm(c),3),source:'Source: viewer replay heatmap (most replayed sections).'};
+    }
+    if(j.transcript){const t=fromTranscript(j.transcript);if(t)return {curve:t,source:'Source: transcript scoring (keywords, questions, emphasis, speech density).'}}
+    toast('This video has no replay data or captions. Using an estimate.');
+  }catch(e){toast('Helper error: '+e.message)}
+  return null;
 }
 
 const KW=/\b(secret|never|always|best|worst|mistake|crazy|insane|wow|incredible|actually|truth|biggest|first|important|why|how|watch|look|tip|trick|stop|warning|finally|amazing|shocking|key)\b/gi;
@@ -208,20 +225,36 @@ function render(curve,source){
   clips.forEach((c,i)=>{h+='<div class="r" data-i="'+i+'" style="left:'+c.s/dur*100+'%;width:'+(c.e-c.s)/dur*100+'%" title="Preview clip '+(i+1)+'">'+(i+1)+'</div>'});
   $('#tl').innerHTML=h;
   $('#tl').querySelectorAll('.r').forEach(e=>e.onclick=()=>preview(+e.dataset.i));
-  $('#list').innerHTML=clips.map((c,i)=>'<div class="clip"><div class="rank">'+(i+1)+'</div><h3>'+esc(title(c,i))+'</h3><div class="meta">'+fmt(c.s)+' to '+fmt(c.e)+' · '+Math.round(c.e-c.s)+' sec · strength '+Math.round(c.score*100)+'%</div><div class="acts"><button data-a="p" data-i="'+i+'">Preview</button><button data-a="l" data-i="'+i+'">Copy link</button><button data-a="c" data-i="'+i+'">Copy download command</button></div></div>').join('');
-  $('#list').querySelectorAll('button').forEach(b=>b.onclick=()=>act(b.dataset.a,+b.dataset.i));
+  $('#list').innerHTML=clips.map((c,i)=>'<div class="clip"><div class="rank">'+(i+1)+'</div><h3>'+esc(title(c,i))+'</h3><div class="meta">'+fmt(c.s)+' to '+fmt(c.e)+' · '+Math.round(c.e-c.s)+' sec · strength '+Math.round(c.score*100)+'%</div><div class="acts"><button data-a="p" data-i="'+i+'">Preview</button><button data-a="l" data-i="'+i+'">Copy link</button><button class="dl" data-a="d" data-i="'+i+'">Download clip</button></div></div>').join('');
+  $('#list').querySelectorAll('button').forEach(b=>b.onclick=()=>act(b.dataset.a,+b.dataset.i,b));
   $('#result').scrollIntoView({behavior:'smooth'});
 }
 const esc=s=>s.replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
 const link=c=>'https://youtu.be/'+vid+'?t='+Math.floor(c.s);
 
 function preview(i){const c=clips[i];player.unMute();player.loadVideoById({videoId:vid,startSeconds:c.s,endSeconds:c.e});document.querySelector('.player').scrollIntoView({behavior:'smooth',block:'center'})}
-function act(a,i){
+function act(a,i,b){
   const c=clips[i];
   if(a==='p')preview(i);
+  if(a==='d')download(i,b);
   if(a==='l')copy(link(c));
   if(a==='c')copy('yt-dlp --download-sections "*'+fmt(c.s)+'-'+fmt(c.e)+'" -o "clip'+(i+1)+'.%(ext)s" https://youtu.be/'+vid);
 }
+async function download(i,btn){
+  const c=clips[i];
+  if(!helperOn){await ping()}
+  if(!helperOn){act('c',i);toast('Helper not running. Copied a command instead. See setup at the bottom.');return}
+  const old=btn?btn.textContent:'';
+  if(btn){btn.disabled=true;btn.textContent='Cutting…'}
+  try{
+    const r=await fetch(HELPER+'/clip?v='+vid+'&start='+c.s+'&end='+c.e+'&vertical='+($('#vert').checked?1:0));
+    if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.error||'download failed')}
+    const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download='clip'+(i+1)+'-'+vid+'.mp4';a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),8000);toast('Saved clip '+(i+1));
+  }catch(e){toast('Failed: '+e.message)}
+  if(btn){btn.disabled=false;btn.textContent=old}
+}
+$('#dlAll').onclick=async()=>{for(let i=0;i<clips.length;i++){await download(i,document.querySelector('button[data-a="d"][data-i="'+i+'"]'))}};
 $('#copyAll').onclick=()=>copy(clips.map((c,i)=>(i+1)+'. '+fmt(c.s)+' - '+fmt(c.e)+'  '+link(c)).join('\n'));
 $('#json').onclick=()=>{
   const b=new Blob([JSON.stringify({video:'https://youtu.be/'+vid,clips:clips.map(c=>({start:c.s,end:c.e,score:+c.score.toFixed(3),link:link(c)}))},null,2)],{type:'application/json'});

@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Clipfinder: find the best 30–60 second moments in a YouTube video</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#e8ecf1;--ink:#14213d;--mute:#5a6578;--panel:#f7f9fb;--line:#c6cedb;--sig:#e63946;--sigsoft:rgba(230,57,70,.16)}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.55 "IBM Plex Sans",system-ui,sans-serif;padding:0 20px 60px}
+main{max-width:980px;margin:0 auto}
+h1{font:800 clamp(2.4rem,7vw,4.6rem)/.95 "Bricolage Grotesque",system-ui,sans-serif;letter-spacing:-.03em;margin:48px 0 14px}
+.lede{max-width:60ch;color:var(--mute);margin:0 0 28px}
+.bar{display:flex;gap:10px;flex-wrap:wrap}
+input[type=text],textarea{font:inherit;color:inherit;background:var(--panel);border:1.5px solid var(--line);border-radius:6px;padding:12px 14px;width:100%}
+input[type=text]{flex:1 1 320px;width:auto}
+textarea{min-height:90px;resize:vertical}
+:focus-visible{outline:3px solid var(--sig);outline-offset:2px}
+button{font:500 1rem "IBM Plex Sans",sans-serif;cursor:pointer;border-radius:6px;border:1.5px solid var(--ink);background:transparent;color:var(--ink);padding:10px 16px}
+button:hover{background:var(--ink);color:#fff}
+button.go{background:var(--sig);border-color:var(--sig);color:#fff;padding:12px 22px;font-weight:500}
+button.go:hover{background:#c92b38}
+.opts{display:flex;gap:28px;flex-wrap:wrap;margin:18px 0 6px;align-items:end}
+.opts label{display:flex;flex-direction:column;gap:4px;font-size:.9rem;color:var(--mute)}
+.opts output{color:var(--ink);font-weight:500}
+details{margin:10px 0 0;font-size:.92rem;color:var(--mute)}
+summary{cursor:pointer}
+details div{margin-top:10px;display:grid;gap:10px}
+#err{color:var(--sig);min-height:1.5em;margin:10px 0 0}
+#result{display:none;margin-top:26px}
+.player{aspect-ratio:16/9;background:var(--ink);border-radius:8px;overflow:hidden;margin-top:18px}
+.player iframe{width:100%;height:100%}
+.tl{position:relative;height:84px;margin:18px 0 6px;background:var(--panel);border:1.5px solid var(--line);border-radius:6px;overflow:hidden}
+.tl svg{position:absolute;inset:0;width:100%;height:100%}
+.tl .r{position:absolute;top:0;bottom:0;background:var(--sigsoft);border-left:3px solid var(--sig);cursor:pointer;color:var(--sig);font:700 .8rem "Bricolage Grotesque",sans-serif;padding:3px 5px}
+.tl .r:hover{background:rgba(230,57,70,.3)}
+.src{font-size:.88rem;color:var(--mute);margin:0 0 18px}
+.clip{display:grid;grid-template-columns:auto 1fr;gap:4px 16px;padding:16px 0;border-top:1.5px solid var(--line)}
+.rank{grid-row:span 3;font:800 2rem/1 "Bricolage Grotesque",sans-serif;color:var(--sig);min-width:1.4em}
+.clip h3{margin:0;font:700 1.15rem "Bricolage Grotesque",sans-serif}
+.meta{font-size:.9rem;color:var(--mute)}
+.acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.acts button{padding:6px 12px;font-size:.88rem}
+.top{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+#toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:9px 16px;border-radius:6px;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast.on{opacity:1}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<main>
+<h1>Clipfinder</h1>
+<p class="lede">Paste a YouTube link. Get the strongest 30–60 second moments, marked on a timeline, ready to preview, share or export.</p>
+
+<div class="bar">
+  <input type="text" id="url" placeholder="https://www.youtube.com/watch?v=…" aria-label="YouTube link" autocomplete="off">
+  <button class="go" id="go">Find clips</button>
+</div>
+<div class="opts">
+  <label>Clip length <output id="lenO">45 sec</output><input type="range" id="len" min="30" max="60" step="5" value="45"></label>
+  <label>Number of clips <output id="cntO">5</output><input type="range" id="cnt" min="1" max="8" value="5"></label>
+</div>
+<details>
+  <summary>Improve accuracy (optional)</summary>
+  <div>
+    <textarea id="tr" placeholder="Paste a transcript with timestamps, one line each:&#10;0:12 So here's the secret nobody tells you…&#10;0:19 First, never skip this step!"></textarea>
+    <input type="text" id="api" placeholder="Replay-heatmap API URL (optional, see README)">
+  </div>
+</details>
+<p id="err" role="alert"></p>
+
+<div class="player"><div id="player"></div></div>
+<section id="result">
+  <div class="tl" id="tl"></div>
+  <p class="src" id="src"></p>
+  <div class="top">
+    <button id="copyAll">Copy all timestamps</button>
+    <button id="json">Download JSON</button>
+  </div>
+  <div id="list"></div>
+</section>
+</main>
+<div id="toast" role="status"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+let player,vid,dur=0,clips=[],ytErr=null;
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const ready=new Promise(r=>{window.onYouTubeIframeAPIReady=()=>{player=new YT.Player('player',{width:'100%',height:'100%',playerVars:{rel:0,playsinline:1},events:{onReady:r,onError:e=>{ytErr=e.data}}})}});
+const tag=document.createElement('script');tag.src='https://www.youtube.com/iframe_api';document.head.appendChild(tag);
+
+const pad=n=>String(n).padStart(2,'0');
+const fmt=s=>{s=Math.round(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return (h?h+':'+pad(m):m)+':'+pad(s%60)};
+const parseId=u=>{u=u.trim();const m=u.match(/(?:v=|youtu\.be\/|shorts\/|embed\/|live\/)([\w-]{11})/);return m?m[1]:(/^[\w-]{11}$/.test(u)?u:null)};
+const toast=t=>{const e=$('#toast');e.textContent=t;e.classList.add('on');setTimeout(()=>e.classList.remove('on'),1600)};
+const copy=async t=>{try{await navigator.clipboard.writeText(t);toast('Copied')}catch{toast('Copy failed: select the text manually')}};
+try{$('#api').value=localStorage.getItem('cf_api')||''}catch{}
+
+$('#len').oninput=e=>$('#lenO').textContent=e.target.value+' sec';
+$('#cnt').oninput=e=>$('#cntO').textContent=e.target.value;
+$('#go').onclick=run;
+$('#url').addEventListener('keydown',e=>{if(e.key==='Enter')run()});
+
+async function getDuration(){
+  ytErr=null;
+  player.mute();player.loadVideoById(vid);
+  for(let i=0;i<60;i++){
+    if(ytErr)throw new Error(ytErr===100?'That video is private or has been removed.':'The owner of that video has disabled embedding, so it can’t be analysed here. Try a different video.');
+    const d=player.getDuration();
+    if(d>0&&(player.getPlayerState()===1||i>20)){player.pauseVideo();player.seekTo(0,true);return d}
+    await sleep(250);
+  }
+  return 0;
+}
+
+async function run(){
+  $('#err').textContent='';
+  const id=parseId($('#url').value);
+  if(!id){$('#err').textContent='That doesn’t look like a YouTube link. Paste a full video URL.';return}
+  $('#go').disabled=true;$('#go').textContent='Analysing…';
+  try{
+    await Promise.race([ready,sleep(10000).then(()=>{throw new Error('The YouTube player didn’t load. Turn off any ad or tracker blocker for this page, then reload.')})]);
+    vid=id;
+    dur=await getDuration();
+    if(!dur){throw new Error('Could not read that video’s length. It may be a live stream or blocked from embedding.')}
+    const len=+$('#len').value,n=+$('#cnt').value;
+    let curve=null,source='';
+    const api=$('#api').value.trim();
+    try{localStorage.setItem('cf_api',api)}catch{}
+    if(api){curve=await fromApi(api,id);source=curve?'Source: viewer replay heatmap (most replayed sections).':''}
+    if(!curve){const t=$('#tr').value.trim();if(t){curve=fromTranscript(t);source=curve?'Source: transcript scoring (keywords, questions, emphasis, speech density).':''}}
+    if(!curve){curve=fallback();source='Source: estimate only. Videos tend to peak early and near the climax. Add a transcript or heatmap API above for real signal.'}
+    clips=pick(curve,len,n);
+    render(curve,source);
+  }catch(e){$('#err').textContent=e.message||String(e)}
+  $('#go').disabled=false;$('#go').textContent='Find clips';
+}
+
+async function fromApi(base,id){
+  try{
+    const r=await fetch(base.replace(/\/$/,'')+'/heatmap?v='+id);
+    const j=await r.json();
+    const a=Array.isArray(j)?j:j.heatmap;
+    if(!a||!a.length)return null;
+    const c=new Array(Math.ceil(dur)).fill(0);
+    a.forEach((p,i)=>{
+      if(typeof p==='number'){const s=Math.floor(i*dur/a.length);c[s]=Math.max(c[s],p)}
+      else{const s=Math.floor(p.start??p.start_time/1000??0),e=Math.ceil(s+(p.duration??p.end_time/1000-s??1));for(let k=s;k<e&&k<c.length;k++)c[k]=p.value??p.intensityScoreNormalized??0}
+    });
+    return smooth(norm(c),3);
+  }catch{toast('Heatmap API failed. Using another method.');return null}
+}
+
+const KW=/\b(secret|never|always|best|worst|mistake|crazy|insane|wow|incredible|actually|truth|biggest|first|important|why|how|watch|look|tip|trick|stop|warning|finally|amazing|shocking|key)\b/gi;
+function fromTranscript(txt){
+  const rows=[];
+  txt.split('\n').forEach(l=>{const m=l.match(/^\s*\[?(?:(\d+):)?(\d{1,2}):(\d{2})\]?\s*[-–:]?\s*(.+)$/);if(m)rows.push({t:(+m[1]||0)*3600+ +m[2]*60+ +m[3],text:m[4]})});
+  if(rows.length<3)return null;
+  rows.sort((a,b)=>a.t-b.t);
+  const c=new Array(Math.ceil(dur)).fill(0);
+  rows.forEach((r,i)=>{
+    const end=Math.min(rows[i+1]?rows[i+1].t:r.t+6,r.t+20);
+    const w=r.text.split(/\s+/).length,kw=(r.text.match(KW)||[]).length,ex=(r.text.match(/[!?]/g)||[]).length;
+    const s=Math.min(w/Math.max(end-r.t,1),4)*.5+kw*1.2+ex*.8;
+    for(let k=r.t;k<end&&k<c.length;k++)c[k]=s;
+  });
+  clips.rows=rows;window._rows=rows;
+  return smooth(norm(c),4);
+}
+
+function fallback(){
+  const n=Math.ceil(dur),c=[];
+  for(let t=0;t<n;t++){const x=t/n;c.push(.35+.5*Math.exp(-t/Math.max(dur*.08,10))+.3*Math.exp(-Math.pow((x-.68)/.12,2)))}
+  return norm(c);
+}
+const norm=c=>{const m=Math.max(...c,1e-9);return c.map(v=>v/m)};
+const smooth=(c,w)=>c.map((_,i)=>{let s=0,k=0;for(let j=Math.max(0,i-w);j<=Math.min(c.length-1,i+w);j++){s+=c[j];k++}return s/k});
+
+function pick(curve,len,n){
+  const D=curve.length;
+  if(D<=len)return [{s:0,e:D,score:1}];
+  const pre=[0];curve.forEach(v=>pre.push(pre[pre.length-1]+v));
+  const cand=[];
+  for(let s=0;s+len<=D;s+=5)cand.push({s,e:s+len,score:(pre[s+len]-pre[s])/len});
+  cand.sort((a,b)=>b.score-a.score);
+  const out=[];
+  for(const c of cand){if(out.length>=n)break;if(out.every(o=>c.s>=o.e||c.e<=o.s))out.push(c)}
+  return out;
+}
+
+function title(c,i){
+  const r=window._rows;
+  if(r&&usingTranscript){const x=r.find(q=>q.t>=c.s)||r[0];return x.text.length>60?x.text.slice(0,57)+'…':x.text}
+  return 'Moment at '+fmt(c.s);
+}
+let usingTranscript=false;
+
+function render(curve,source){
+  usingTranscript=source.includes('transcript');
+  $('#result').style.display='block';
+  $('#src').textContent=source;
+  const pts=curve.filter((_,i)=>i%Math.max(1,Math.floor(curve.length/240))===0).map((v,i,a)=>(i/(a.length-1)*1000).toFixed(1)+','+(80-v*70).toFixed(1)).join(' ');
+  let h='<svg viewBox="0 0 1000 84" preserveAspectRatio="none" aria-hidden="true"><polyline points="'+pts+'" fill="none" stroke="#14213d" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>';
+  clips.forEach((c,i)=>{h+='<div class="r" data-i="'+i+'" style="left:'+c.s/dur*100+'%;width:'+(c.e-c.s)/dur*100+'%" title="Preview clip '+(i+1)+'">'+(i+1)+'</div>'});
+  $('#tl').innerHTML=h;
+  $('#tl').querySelectorAll('.r').forEach(e=>e.onclick=()=>preview(+e.dataset.i));
+  $('#list').innerHTML=clips.map((c,i)=>'<div class="clip"><div class="rank">'+(i+1)+'</div><h3>'+esc(title(c,i))+'</h3><div class="meta">'+fmt(c.s)+' to '+fmt(c.e)+' · '+Math.round(c.e-c.s)+' sec · strength '+Math.round(c.score*100)+'%</div><div class="acts"><button data-a="p" data-i="'+i+'">Preview</button><button data-a="l" data-i="'+i+'">Copy link</button><button data-a="c" data-i="'+i+'">Copy download command</button></div></div>').join('');
+  $('#list').querySelectorAll('button').forEach(b=>b.onclick=()=>act(b.dataset.a,+b.dataset.i));
+  $('#result').scrollIntoView({behavior:'smooth'});
+}
+const esc=s=>s.replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+const link=c=>'https://youtu.be/'+vid+'?t='+Math.floor(c.s);
+
+function preview(i){const c=clips[i];player.unMute();player.loadVideoById({videoId:vid,startSeconds:c.s,endSeconds:c.e});document.querySelector('.player').scrollIntoView({behavior:'smooth',block:'center'})}
+function act(a,i){
+  const c=clips[i];
+  if(a==='p')preview(i);
+  if(a==='l')copy(link(c));
+  if(a==='c')copy('yt-dlp --download-sections "*'+fmt(c.s)+'-'+fmt(c.e)+'" -o "clip'+(i+1)+'.%(ext)s" https://youtu.be/'+vid);
+}
+$('#copyAll').onclick=()=>copy(clips.map((c,i)=>(i+1)+'. '+fmt(c.s)+' - '+fmt(c.e)+'  '+link(c)).join('\n'));
+$('#json').onclick=()=>{
+  const b=new Blob([JSON.stringify({video:'https://youtu.be/'+vid,clips:clips.map(c=>({start:c.s,end:c.e,score:+c.score.toFixed(3),link:link(c)}))},null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='clips-'+vid+'.json';a.click();
+};
+</script>
+</body>
+</html>
